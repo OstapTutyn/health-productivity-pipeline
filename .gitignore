@@ -1,0 +1,7 @@
+.env
+*.json
+!example_*.json
+__pycache__/
+.venv/
+venv/
+.DS_Store
