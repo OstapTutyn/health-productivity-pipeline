@@ -1,7 +1,15 @@
+# Environmental variables (keys and secrets)
 .env
-*.json
-!example_*.json
-__pycache__/
-.venv/
+
+# Virtual environment
 venv/
-.DS_Store
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE settings
+.idea/
+.vscode/
