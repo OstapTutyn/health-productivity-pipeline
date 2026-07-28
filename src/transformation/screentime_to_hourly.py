@@ -4,7 +4,6 @@ from datetime import datetime
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -64,57 +63,61 @@ def get_app_category(app_or_site: str) -> str:
     return categories.get(app_or_site, "Other")
 
 
-def fetch_latest_bronze_record(supabase: Client) -> dict:
-    payload = (
+def fetch_unprocessed_bronze_records(supabase: Client) -> list[dict]:
+    response = (
         supabase.table("bronze_screentime")
-        .select("raw_payload")
-        .order("inserted_at", desc=True)
-        .limit(1)
+        .select("id, raw_payload")
+        .eq("is_processed", False)
         .execute()
     )
-
-    if payload.data:
-        return payload.data[0]["raw_payload"]
-    return {}
+    return response.data if response.data else []
 
 
-def transform_data(payload: dict) -> list[dict]:
-    events = payload.get("events", [])
-    device = payload.get("device", "Unknown device")
+def transform_data(records: list[dict]) -> list[dict]:
+    hourly_app_durations = {}
 
-    if not events:
-        return []
+    for record in records:
+        payload = record.get("raw_payload", {})
+        events = payload.get("events", [])
+        device = payload.get("device", "Unknown device")
 
-    first_event_time = datetime.fromisoformat(events[0]["timestamp"])
-    hourly_ts = first_event_time.replace(minute=0, second=0, microsecond=0)
+        for event in events:
+            raw_timestamp = event.get("timestamp")
+            if not raw_timestamp:
+                continue
 
-    app_durations = {}
+            event_time = datetime.fromisoformat(raw_timestamp)
+            hourly_ts = event_time.replace(minute=0, second=0, microsecond=0)
+            hourly_ts_str = hourly_ts.isoformat()
+            entry_date_str = str(hourly_ts.date())
 
-    for event in events:
-        raw_app = event.get("data", {}).get("app", "Unknown")
-        window_title = event.get("data", {}).get("title", "")
-        duration = event.get("duration", 0)
+            raw_app = event.get("data", {}).get("app", "Unknown")
+            window_title = event.get("data", {}).get("title", "")
+            duration = event.get("duration", 0)
 
-        display_name = parse_app_or_website(raw_app, window_title)
-        app_durations[display_name] = app_durations.get(display_name, 0) + duration
+            display_name = parse_app_or_website(raw_app, window_title)
 
-    records = []
-    for app_or_site, seconds in app_durations.items():
-        records.append({
-            "hourly_timestamp": hourly_ts.isoformat(),
-            "entry_date": str(hourly_ts.date()),
+            group_key = (hourly_ts_str, entry_date_str, device, display_name)
+            hourly_app_durations[group_key] = (
+                hourly_app_durations.get(group_key, 0) + duration
+            )
+
+    transformed_records = []
+    for (hourly_ts_str, entry_date_str, device, app_name), total_seconds in hourly_app_durations.items():
+        transformed_records.append({
+            "hourly_timestamp": hourly_ts_str,
+            "entry_date": entry_date_str,
             "active_device": device,
-            "app_name": app_or_site,
-            "category": get_app_category(app_or_site),
-            "active_minutes": round(seconds / 60, 2)
+            "app_name": app_name,
+            "category": get_app_category(app_name),
+            "active_minutes": round(total_seconds / 60, 2),
         })
 
-    return records
+    return transformed_records
 
 
 def upsert_hourly_summary(supabase: Client, hourly_data: list[dict]):
     if not hourly_data:
-        print("Немає даних для збереження.")
         return
 
     supabase.table("stg_screentime_hourly").upsert(
@@ -122,20 +125,38 @@ def upsert_hourly_summary(supabase: Client, hourly_data: list[dict]):
         on_conflict="hourly_timestamp,active_device,app_name"
     ).execute()
 
-    print("Погодинні деталізовані дані успішно збережено!")
+    print(f"Успішно збережено/оновлено {len(hourly_data)} записів у stg_screentime_hourly!")
+
+
+def mark_bronze_records_as_processed(supabase: Client, record_ids: list[int]):
+    if not record_ids:
+        return
+
+    supabase.table("bronze_screentime").update(
+        {"is_processed": True}
+    ).in_("id", record_ids).execute()
+
+    print(f"Позначено {len(record_ids)} батчів у Bronze як is_processed = True.")
 
 
 if __name__ == "__main__":
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    print("Зчитуємо дані з Bronze...")
-    raw_payload = fetch_latest_bronze_record(supabase_client)
+    print("Шукаємо необроблені записи в Bronze...")
+    unprocessed_records = fetch_unprocessed_bronze_records(supabase_client)
 
-    if raw_payload:
-        print("Розраховуємо погодинну агрегацію та витягуємо сайти...")
-        hourly_summary = transform_data(raw_payload)
+    if unprocessed_records:
+        record_ids = [r["id"] for r in unprocessed_records]
+        print(f"Знайдено {len(unprocessed_records)} необроблених батчів. Обробляємо...")
 
-        print("Вставляємо в stg_screentime_hourly...")
-        upsert_hourly_summary(supabase_client, hourly_summary)
+        transformed_data = transform_data(unprocessed_records)
+
+        print("Вставляємо трансформовані дані в stg_screentime_hourly...")
+        upsert_hourly_summary(supabase_client, transformed_data)
+
+        print("Оновлюємо статус у Bronze...")
+        mark_bronze_records_as_processed(supabase_client, record_ids)
+
+        print("ІНКРЕМЕНТАЛЬНУ ОБРОБКУ ЗАВЕРШЕНО УСПІШНО!")
     else:
-        print("Не вдалося знайти записи в bronze_screentime.")
+        print("Усі записи в Bronze вже оброблені. Нових даних немає.")
