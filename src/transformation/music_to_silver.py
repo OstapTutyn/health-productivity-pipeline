@@ -1,5 +1,6 @@
 import os
 import requests
+import urllib.parse
 from collections import Counter
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -66,16 +67,12 @@ def enrich_track_details(artist_name: str, track_name: str) -> dict:
 
     # 2. Отримуємо BPM (MusicBrainz / AcousticBrainz lookup або пошуковий фолбек)
     try:
-        # Безкоштовний відкритий API MusicBrainz/GetSongBPM lookup
-        mb_url = f"https://api.musicbrainz.org/ws/2/recording?query=artist:{artist_name}%20AND%20recording:{track_name}&fmt=json"
+        # Безпечне кодування кирилиці для URL
+        safe_query = urllib.parse.quote(f'artist:"{artist_name}" AND recording:"{track_name}"')
+        mb_url = f"https://api.musicbrainz.org/ws/2/recording?query={safe_query}&fmt=json"
+
         headers = {"User-Agent": "PersonalRoutinePipeline/1.0 (contact@example.com)"}
         mb_resp = requests.get(mb_url, headers=headers, timeout=5)
-        if mb_resp.status_code == 200:
-            recordings = mb_resp.json().get("recordings", [])
-            if recordings:
-                # Шукаємо атрибут bpm у розширених тегах або первинних метаданих
-                # Якщо точного BPM немає, залишаємо None або вираховуємо середнє за жанром
-                pass
     except Exception:
         pass
 

@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -19,8 +20,41 @@ def fetch_unprocessed_records(supabase: Client) -> list[dict]:
     return response.data if response.data else []
 
 
+def parse_app_or_website(app_name: str, window_title: str) -> str:
+    """Витягує назву конкретного сайту, якщо відкритий браузер."""
+    browsers = ["Google Chrome", "Safari", "Arc", "Firefox"]
+
+    if app_name not in browsers or not window_title:
+        return app_name
+
+    title_lower = window_title.lower()
+
+    if "gemini" in title_lower:
+        return "Google Gemini"
+    elif "github" in title_lower:
+        return "GitHub"
+    elif "supabase" in title_lower:
+        return "Supabase"
+    elif "localhost" in title_lower or "127.0.0.1" in title_lower:
+        return "Localhost (Dev)"
+    elif "youtube" in title_lower:
+        return "YouTube"
+    elif "notion" in title_lower:
+        return "Notion Web"
+    elif "google search" in title_lower or "пошук google" in title_lower:
+        return "Google Search"
+    elif "перекладач" in title_lower or "translate" in title_lower:
+        return "Google Translate"
+
+    domain_match = re.search(r"([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", window_title)
+    if domain_match:
+        return domain_match.group(1)
+
+    return f"{app_name} (Web)"
+
+
 def transform_to_events(payload: dict) -> list[dict]:
-    """Розпаковує сирий payload у список очищених, дедуплікованих подій."""
+    """Розпаковує сирий payload у список очищених, дедуплікованих подій із розпізнаванням сайтів."""
     events = payload.get("events", [])
     device = payload.get("device", "Unknown device")
 
@@ -28,22 +62,24 @@ def transform_to_events(payload: dict) -> list[dict]:
     for event in events:
         data = event.get("data", {})
         started_at = event.get("timestamp")
-        app_name = data.get("app", "Unknown")
+        raw_app = data.get("app", "Unknown")
+        window_title = data.get("title", "")
         duration = event.get("duration", 0)
 
         # --- DATA QUALITY CHECKS ---
-        # Відкидаємо нульову/від'ємну тривалість та баги Apple (> 24 год)
         if duration <= 0 or duration > 86400:
             continue
 
-        # Ключ для унікальності
-        key = (device, started_at, app_name)
+        # --- РОЗПІЗНАВАННЯ САЙТІВ ---
+        parsed_app_name = parse_app_or_website(raw_app, window_title)
 
-        # Беремо останній або записуємо унікальний
+        # Ключ для унікальності
+        key = (device, started_at, parsed_app_name)
+
         unique_events[key] = {
             "device": device,
-            "app_name": app_name,
-            "window_title": data.get("title", ""),
+            "app_name": parsed_app_name,  # Тепер тут буде GitHub, YouTube або конкретний домен
+            "window_title": window_title,
             "started_at": started_at,
             "duration_seconds": duration,
         }
@@ -86,19 +122,13 @@ if __name__ == "__main__":
         processed_ids = []
 
         for record in unprocessed_records:
-            print(f"Трансформуємо батч ID {record['id']}...")
             clean_events = transform_to_events(record["raw_payload"])
             all_clean_events.extend(clean_events)
             processed_ids.append(record["id"])
 
         if all_clean_events:
-            print("Вставляємо в stg_screentime_events...")
             upsert_to_silver(supabase_client, all_clean_events)
-        else:
-            print("Після очистки аномалій не залишилося валідних подій для збереження.")
 
-        # Позначаємо як оброблені навіть якщо батч складався лише з аномалій,
-        # щоб скрипт не зациклювався на битих даних.
         mark_as_processed(supabase_client, processed_ids)
     else:
         print("Усі записи в bronze_screentime вже оброблені. Нових даних немає.")
