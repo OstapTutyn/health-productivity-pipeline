@@ -24,36 +24,43 @@ MACOS_EXCLUDED_KEYWORDS = [
 ]
 
 
-def get_last_processed_timestamp(supabase: Client) -> datetime:
-    """Отримує найсвіжіший timestamp подій для iPhone 13 із бронзового шару."""
+def get_iphone_watermark(supabase: Client) -> datetime:
+    """Отримує останній timestamp подій для iPhone 13 із etl_watermarks."""
     try:
-        res = (
-            supabase.table("bronze_screentime")
-            .select("raw_payload")
-            .filter("raw_payload->>device", "eq", "iPhone 13")
-            .order("inserted_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-
-        if res.data and len(res.data) > 0:
-            payload = res.data[0].get("raw_payload", {})
-            events = payload.get("events", [])
-            if events:
-                # Знаходимо максимальний timestamp серед подій останнього батчу
-                max_ts_str = max(e["timestamp"] for e in events if "timestamp" in e)
-                return datetime.fromisoformat(max_ts_str)
+        res = supabase.table("etl_watermarks").select("last_extracted_timestamp").eq("source_name", "iphone_13").execute()
+        if res.data:
+            iso_str = res.data[0]["last_extracted_timestamp"]
+            # Заміна Z на +00:00 для коректного парсингу в Python
+            return datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
     except Exception as e:
-        print(f"⚠️ Не вдалося отримати останній timestamp із Supabase: {e}")
+        print(f"Не вдалося отримати watermark з Supabase: {e}")
 
-    # За замовчуванням (якщо база порожня) — забираємо за останні 24 години
+    # За замовчуванням — за останні 24 години
     return datetime.now(timezone.utc) - timedelta(days=1)
+
+
+def update_iphone_watermark(supabase: Client, raw_events: list[dict]):
+    """Оновлює watermark новим максимальним часом після успішного збереження."""
+    if not raw_events:
+        return
+
+    # Знаходимо максимальний timestamp серед подій
+    max_ts_str = max(e["timestamp"] for e in raw_events if "timestamp" in e)
+    max_dt = datetime.fromisoformat(max_ts_str.replace("Z", "+00:00"))
+
+    try:
+        supabase.table("etl_watermarks").update({
+            "last_extracted_timestamp": max_dt.isoformat()
+        }).eq("source_name", "iphone_13").execute()
+        print(f"💧 Watermark для 'iphone_13' успішно оновлено до {max_dt.isoformat()}")
+    except Exception as e:
+        print(f"Помилка оновлення watermark: {e}")
 
 
 def fetch_iphone_events_from_db(since_dt: datetime) -> list[dict]:
     """Витягує з knowledgeC.db тільки події, новіші за since_dt."""
     if not os.path.exists(ORIGINAL_DB_PATH):
-        print(f"❌ Базу даних за шляхом {ORIGINAL_DB_PATH} не знайдено.")
+        print(f"Базу даних за шляхом {ORIGINAL_DB_PATH} не знайдено.")
         return []
 
     shutil.copy2(ORIGINAL_DB_PATH, TEMP_DB_PATH)
@@ -114,7 +121,7 @@ def fetch_iphone_events_from_db(since_dt: datetime) -> list[dict]:
 
         conn.close()
     except Exception as e:
-        print(f"⚠️ Помилка зчитування knowledgeC.db: {e}")
+        print(f"Помилка зчитування knowledgeC.db: {e}")
     finally:
         if os.path.exists(TEMP_DB_PATH):
             os.remove(TEMP_DB_PATH)
@@ -122,10 +129,10 @@ def fetch_iphone_events_from_db(since_dt: datetime) -> list[dict]:
     return events
 
 
-def insert_iphone_to_bronze(supabase: Client, raw_events: list[dict]):
+def insert_iphone_to_bronze(supabase: Client, raw_events: list[dict]) -> bool:
+    """Зберігає події у bronze_screentime. Повертає True, якщо успішно."""
     if not raw_events:
-        print("ℹ️ Нових подій з iPhone 13 з моменту останньої синхронізації немає.")
-        return
+        return False
 
     payload = {
         "device": "iPhone 13",
@@ -139,22 +146,29 @@ def insert_iphone_to_bronze(supabase: Client, raw_events: list[dict]):
             {"raw_payload": payload}
         ).execute()
         print(
-            f"✅ Успішно збережено {len(raw_events)} НОВИХ подій для iPhone 13 у bronze_screentime!"
+            f"Успішно збережено {len(raw_events)} НОВИХ подій для iPhone 13 у bronze_screentime!"
         )
+        return True
     except Exception as e:
-        print(f"❌ Помилка відправки в Supabase: {e}")
+        print(f"Помилка відправки в Supabase: {e}")
+        return False
 
 
 if __name__ == "__main__":
     print("⏳ Інкрементальний запуск зчитування для iPhone 13...")
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    # 1. Визначаємо, від якого моменту шукати події
-    last_processed_dt = get_last_processed_timestamp(supabase_client)
-    print(f"🔎 Шукаємо події новіші за: {last_processed_dt.isoformat()}")
+    # 1. Читаємо стан (watermark) з нової таблиці
+    last_processed_dt = get_iphone_watermark(supabase_client)
+    print(f"Шукаємо події новіші за: {last_processed_dt.isoformat()}")
 
-    # 2. Зчитуємо тільки дельта-дані з бази
+    # 2. Зчитуємо тільки дельта-дані з локальної SQLite бази macOS
     iphone_events = fetch_iphone_events_from_db(last_processed_dt)
 
-    # 3. Записуємо в Bronze тільки якщо є нові події
-    insert_iphone_to_bronze(supabase_client, iphone_events)
+    # 3. Записуємо в Bronze і, якщо успішно, оновлюємо watermark
+    if iphone_events:
+        is_success = insert_iphone_to_bronze(supabase_client, iphone_events)
+        if is_success:
+            update_iphone_watermark(supabase_client, iphone_events)
+    else:
+        print("Нових подій з iPhone 13 з моменту останньої синхронізації немає.")

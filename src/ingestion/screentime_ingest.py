@@ -23,7 +23,7 @@ def load_local_buffer() -> list[dict]:
                     print(f"📦 Знайдено {len(data)} невідправлених подій у локальному буфері.")
                 return data
         except Exception as e:
-            print(f"⚠️ Помилка зчитання буфера: {e}")
+            print(f"Помилка зчитання буфера: {e}")
             return []
     return []
 
@@ -48,14 +48,14 @@ def fetch_screentime_events(limit: int = 100) -> list[dict]:
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        print(f"⚠️ Не вдалося отримати дані з ActivityWatch: {e}")
+        print(f"Не вдалося отримати дані з ActivityWatch: {e}")
         return []
 
 
 def insert_to_bronze(supabase: Client, raw_events: list[dict]) -> bool:
     """Відправляє події у bronze_screentime. Повертає True, якщо відправка успішна."""
     if not raw_events:
-        print("⚠️ Немає нових подій для запису.")
+        print("Немає нових подій для запису.")
         return True
 
     payload = {
@@ -67,15 +67,15 @@ def insert_to_bronze(supabase: Client, raw_events: list[dict]) -> bool:
 
     try:
         supabase.table("bronze_screentime").insert({"raw_payload": payload}).execute()
-        print(f"✅ Успішно збережено {len(raw_events)} подій у bronze_screentime!")
+        print(f"Успішно збережено {len(raw_events)} подій у bronze_screentime!")
         return True
     except Exception as e:
-        print(f"❌ Помилка відправки в Supabase: {e}")
+        print(f"Помилка відправки в Supabase: {e}")
         return False
 
 
 if __name__ == "__main__":
-    print("⏳ Перевіряємо буфер та отримуємо дані про екранний час...")
+    print("Перевіряємо буфер та отримуємо дані про екранний час...")
 
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -101,6 +101,6 @@ if __name__ == "__main__":
             clear_local_buffer()
             print("🧹 Локальний буфер очищено.")
         else:
-            print("💾 Відправка не вдалася. Події збережено на диску до наступного запуску.")
+            print("Відправка не вдалася. Події збережено на диску до наступного запуску.")
     else:
-        print("✨ Немає нових подій для обробки.")
+        print("Немає нових подій для обробки.")
