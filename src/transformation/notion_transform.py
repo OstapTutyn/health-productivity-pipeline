@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -47,7 +48,7 @@ def parse_notion_page(page: dict) -> tuple[dict | None, str | None]:
         else:
             return None, None
 
-    # Сувора перевірка формату дати (захист від дефісів та битих даних)
+    # Сувора перевірка формату дати
     try:
         clean_date_str = str(date_str).split("T")[0]
         entry_date = datetime.strptime(clean_date_str, "%Y-%m-%d").strftime("%Y-%m-%d")
@@ -98,7 +99,10 @@ def generate_missing_null_records(supabase: Client, processed_dates: set[str]):
     while current_date <= today:
         date_str = current_date.strftime("%Y-%m-%d")
         if date_str not in processed_dates:
+            # Генеруємо стабільний унікальний UUID для пропущеного дня
+            missing_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"missing-{date_str}"))
             null_records.append({
+                "notion_page_id": missing_uuid,
                 "entry_date": date_str,
                 "overall_score": None,
                 "energy": None,
@@ -142,7 +146,7 @@ def process_notion_transform(supabase: Client):
         ).execute()
         print(f"Успішно збережено {len(all_journal_records)} записів у silver_journal.")
 
-    # 2. Заповнюємо пропущені дні NULL-значеннями
+    # 2. Заповнюємо пропущені дні NULL-значеннями з унікальними ID
     if all_processed_dates:
         generate_missing_null_records(supabase, all_processed_dates)
 
