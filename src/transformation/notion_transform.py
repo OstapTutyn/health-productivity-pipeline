@@ -47,7 +47,12 @@ def parse_notion_page(page: dict) -> tuple[dict | None, str | None]:
         else:
             return None, None
 
-    entry_date = datetime.fromisoformat(date_str).strftime("%Y-%m-%d")
+    # Сувора перевірка формату дати (захист від дефісів та битих даних)
+    try:
+        clean_date_str = str(date_str).split("T")[0]
+        entry_date = datetime.strptime(clean_date_str, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except (ValueError, TypeError, AttributeError):
+        return None, None
 
     # Витягуємо метрики, формули та текст відповідно до назв у Supabase та Notion
     energy_raw = properties.get("Енергія", {}).get("number")
@@ -128,9 +133,9 @@ def process_notion_transform(supabase: Client):
         if j_rec:
             all_journal_records.append(j_rec)
         if p_date:
-            all_processed_dates.update(p_date)
+            all_processed_dates.add(p_date)
 
-    # 1. Зберігаємо реальні записи у silver_journal (без try-except, щоб бачити помилки в логах)
+    # 1. Зберігаємо реальні записи у silver_journal
     if all_journal_records:
         supabase.table("silver_journal").upsert(
             all_journal_records, on_conflict="notion_page_id"
@@ -141,7 +146,7 @@ def process_notion_transform(supabase: Client):
     if all_processed_dates:
         generate_missing_null_records(supabase, all_processed_dates)
 
-    # 3. Позначаємо рядки в bronze_journal як оброблені тільки якщо вставка пройшла успішно
+    # 3. Позначаємо рядки в bronze_journal як оброблені
     supabase.table("bronze_journal").update(
         {"is_processed": True}
     ).in_("id", processed_ids).execute()
