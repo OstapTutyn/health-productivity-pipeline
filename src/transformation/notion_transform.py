@@ -36,10 +36,11 @@ def clamp_int_metric(val, min_val=1, max_val=10):
 
 
 def parse_notion_page(page: dict) -> tuple[dict | None, str | None]:
-    """Парсить одну сторінку щоденника з сирого пейлоаду."""
+    """Парсить одну сторінку щоденника з сирого пейлоаду під структуру silver_journal."""
+    page_id = page.get("id")
     properties = page.get("properties", {})
 
-    # Витягуємо дату з урахуванням вкладеної структури Notion API та української назви поля
+    # Витягуємо дату
     date_obj = properties.get("Дата", {}).get("date", {})
     date_str = date_obj.get("start") if date_obj else None
 
@@ -52,18 +53,27 @@ def parse_notion_page(page: dict) -> tuple[dict | None, str | None]:
 
     entry_date = datetime.fromisoformat(date_str).strftime("%Y-%m-%d")
 
-    # Витягуємо мітки та текст за правильними назвами у Notion
+    # Витягуємо метрики та текст відповідно до назв у Supabase та Notion
     energy_raw = properties.get("Енергія", {}).get("number")
     mood_raw = properties.get("Настрій", {}).get("number")
-    notes_raw = properties.get("Лог", {}).get("rich_text", [])
+    stress_raw = properties.get("Стрес", {}).get("number")
+    prod_raw = properties.get("Продуктивність", {}).get("number")
 
-    notes = "".join([n.get("plain_text", "") for n in notes_raw]) if notes_raw else None
+    notes_raw = properties.get("Лог", {}).get("rich_text", [])
+    log_text = "".join([n.get("plain_text", "") for n in notes_raw]) if notes_raw else None
+
+    tags_raw = properties.get("Тег", {}).get("multi_select", [])
+    tags = [t.get("name") for t in tags_raw if t.get("name")] if tags_raw else []
 
     record = {
+        "notion_page_id": page_id,
         "entry_date": entry_date,
-        "energy_level": clamp_int_metric(energy_raw),
-        "mood_score": clamp_int_metric(mood_raw),
-        "notes": notes,
+        "energy": clamp_int_metric(energy_raw),
+        "mood": clamp_int_metric(mood_raw),
+        "stress": clamp_int_metric(stress_raw),
+        "productivity": clamp_int_metric(prod_raw),
+        "tags": tags,
+        "log_text": log_text,
     }
     return record, entry_date
 
@@ -85,9 +95,12 @@ def generate_missing_null_records(supabase: Client, processed_dates: set[str]):
         if date_str not in processed_dates:
             null_records.append({
                 "entry_date": date_str,
-                "energy_level": None,
-                "mood_score": None,
-                "notes": None,
+                "energy": None,
+                "mood": None,
+                "stress": None,
+                "productivity": None,
+                "tags": [],
+                "log_text": None,
             })
         current_date += timedelta(days=1)
 
@@ -112,7 +125,6 @@ def process_notion_transform(supabase: Client):
     all_processed_dates = set()
 
     for record in records:
-        # Кожен рядок у bronze_journal — це окрема сторінка у raw_payload
         payload = record.get("raw_payload", {})
         j_rec, p_date = parse_notion_page(payload)
         if j_rec:
@@ -120,11 +132,11 @@ def process_notion_transform(supabase: Client):
         if p_date:
             all_processed_dates.add(p_date)
 
-    # 1. Зберігаємо реальні записи у silver_journal
+    # 1. Зберігаємо реальні записи у silver_journal за унікальним notion_page_id
     if all_journal_records:
         try:
             supabase.table("silver_journal").upsert(
-                all_journal_records, on_conflict="entry_date"
+                all_journal_records, on_conflict="notion_page_id"
             ).execute()
             print(f"Успішно збережено {len(all_journal_records)} записів у silver_journal.")
         except Exception as e:
