@@ -21,14 +21,19 @@ def fetch_unprocessed_records(supabase: Client) -> list[dict]:
 
 
 def parse_app_or_website(app_name: str, window_title: str) -> str:
-    """Витягує назву конкретного сайту, якщо відкритий браузер."""
-    browsers = ["Google Chrome", "Safari", "Arc", "Firefox"]
+    """Гнучко витягує назву сайту або очищує заголовок вікна браузера."""
+    browsers = ["chrome", "safari", "arc", "firefox", "brave", "edge"]
+    app_lower = app_name.lower()
 
-    if app_name not in browsers or not window_title:
+    # Перевіряємо, чи це браузер (незалежно від регістру)
+    is_browser = any(b in app_lower for b in browsers)
+
+    if not is_browser or not window_title:
         return app_name
 
     title_lower = window_title.lower()
 
+    # Чіткі ключові слова для твоїх основних робочих сервісів
     if "gemini" in title_lower:
         return "Google Gemini"
     elif "github" in title_lower:
@@ -41,16 +46,51 @@ def parse_app_or_website(app_name: str, window_title: str) -> str:
         return "YouTube"
     elif "notion" in title_lower:
         return "Notion Web"
+    elif "chatgpt" in title_lower or "openai" in title_lower:
+        return "ChatGPT"
     elif "google search" in title_lower or "пошук google" in title_lower:
         return "Google Search"
     elif "перекладач" in title_lower or "translate" in title_lower:
         return "Google Translate"
+    elif "stackoverflow" in title_lower:
+        return "Stack Overflow"
 
+    # Якщо це інша сторінка — очищуємо суфікс браузера із заголовка (наприклад, " - Google Chrome")
+    clean_title = window_title
+    for suffix in [" - google chrome", " - safari", " - arc", " - firefox", " - brave", " - microsoft edge"]:
+        if clean_title.lower().endswith(suffix):
+            clean_title = clean_title[:-len(suffix)]
+            break
+
+    if clean_title and len(clean_title.strip()) > 0:
+        return clean_title.strip()
+
+    # Запасний варіант через домен
     domain_match = re.search(r"([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", window_title)
     if domain_match:
         return domain_match.group(1)
 
     return f"{app_name} (Web)"
+
+
+def get_app_category(app_or_site: str) -> str:
+    """Визначає категорію за допомогою пошуку ключових слів (підтримує чисті назви вікон)."""
+    site_lower = app_or_site.lower()
+
+    if any(w in site_lower for w in ["pycharm", "vs code", "terminal", "github", "localhost", "supabase", "sublime"]):
+        return "Development"
+    elif any(w in site_lower for w in ["gemini", "chatgpt", "openai"]):
+        return "AI / Research"
+    elif any(w in site_lower for w in ["google search", "translate", "перекладач", "stackoverflow", "wikipedia"]):
+        return "Browsing / Research"
+    elif any(w in site_lower for w in ["notion"]):
+        return "Productivity"
+    elif any(w in site_lower for w in ["telegram", "discord", "slack"]):
+        return "Communication"
+    elif any(w in site_lower for w in ["youtube", "music", "apple music", "netflix", "twitch"]):
+        return "Entertainment"
+
+    return "Other"
 
 
 def transform_to_events(payload: dict) -> list[dict]:

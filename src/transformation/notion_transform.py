@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -8,115 +9,145 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 
-def fetch_unprocessed_records(supabase: Client) -> list[dict]:
-    """Витягує всі батчі з Bronze, які ще не були оброблені."""
-    response = (
-        supabase.table("bronze_journal")
-        .select("id, raw_payload")
-        .eq("is_processed", False)
-        .execute()
-    )
-    return response.data if response.data else []
+def fetch_unprocessed_notion_records(supabase: Client) -> list[dict]:
+    """Витягує необроблені батчі з bronze_notion."""
+    try:
+        response = (
+            supabase.table("bronze_notion")
+            .select("id, raw_payload")
+            .eq("is_processed", False)
+            .execute()
+        )
+        return response.data if response.data else []
+    except Exception as e:
+        print(f"Помилка отримання даних з bronze_notion: {e}")
+        return []
 
 
-def clamp_int_metric(value, min_val=1, max_val=10):
-    """Конвертує в ціле число (int) та обмежує від 1 до 10 (для int2 колонок)."""
-    if value is None:
+def clamp_int_metric(val, min_val=1, max_val=10):
+    """Валідує та обмежує цілочисельні мітки в межах норми."""
+    if val is None:
         return None
     try:
-        val = int(round(float(value)))
-        return max(min_val, min(max_val, val))
+        num = int(val)
+        return max(min_val, min(max_val, num))
     except (ValueError, TypeError):
         return None
 
 
-def clamp_float_metric(value, min_val=1.0, max_val=10.0):
-    """Конвертує в дробове число (float) та обмежує (для numeric колонок)."""
-    if value is None:
-        return None
-    try:
-        val = float(value)
-        return max(min_val, min(max_val, val))
-    except (ValueError, TypeError):
-        return None
+def parse_notion_pages(payload: dict) -> tuple[list[dict], set[str]]:
+    """Парсить сторінки щоденника з сирого пейлоаду та повертає записи і множину дат."""
+    pages = payload.get("pages", [])
+    journal_records = []
+    processed_dates = set()
+
+    for page in pages:
+        properties = page.get("properties", {})
+
+        # Витягуємо дату запису (адаптуй під назву своєї поля в Notion, наприклад "Date" або "Name")
+        date_str = properties.get("Date", {}).get("start")
+        if not date_str:
+            # Фолбек на дату створення, якщо дата не вказана явно
+            created_time = page.get("created_time")
+            if created_time:
+                date_str = created_time.split("T")[0]
+            else:
+                continue
+
+        entry_date = datetime.fromisoformat(date_str).strftime("%Y-%m-%d")
+        processed_dates.add(entry_date)
+
+        # Приклад витягування міток (енергія, настрій тощо — адаптуй назви під свої властивості в Notion)
+        energy_raw = properties.get("Energy", {}).get("number")
+        mood_raw = properties.get("Mood", {}).get("number")
+        notes_raw = properties.get("Notes", {}).get("rich_text", [])
+
+        notes = "".join([n.get("plain_text", "") for n in notes_raw]) if notes_raw else None
+
+        journal_records.append({
+            "entry_date": entry_date,
+            "energy_level": clamp_int_metric(energy_raw),
+            "mood_score": clamp_int_metric(mood_raw),
+            "notes": notes,
+        })
+
+    return journal_records, processed_dates
 
 
-def parse_notion_journal(raw_json: dict) -> dict:
-    """Трансформує сирий JSON із Notion у чистий словник із валідацією якості даних."""
-    if not raw_json:
-        return None
+def generate_missing_null_records(supabase: Client, processed_dates: set[str]):
+    """Генерує NULL-записи для днів, коли щоденник не заповнювався (забув записати)."""
+    if not processed_dates:
+        return
 
-    props = raw_json.get("properties", {})
+    min_date_str = min(processed_dates)
+    min_date = datetime.strptime(min_date_str, "%Y-%m-%d").date()
+    today = datetime.now(timezone.utc).date()
 
-    # 1. Складні поля (теги, лог, дата)
-    multi_select = props.get("Тег", {}).get("multi_select", [])
-    tags = [t.get("name") for t in multi_select if "name" in t]
+    current_date = min_date
+    null_records = []
 
-    rich_text = props.get("Лог", {}).get("rich_text", [])
-    log_text = rich_text[0].get("plain_text") if rich_text else None
+    while current_date <= today:
+        date_str = current_date.strftime("%Y-%m-%d")
+        if date_str not in processed_dates:
+            null_records.append({
+                "entry_date": date_str,
+                "energy_level": None,
+                "mood_score": None,
+                "notes": None,
+            })
+        current_date += timedelta(days=1)
 
-    date_block = props.get("Дата", {}).get("date")
-    entry_date = date_block.get("start") if date_block else None
-
-    # 2. Метрики з Data Quality Checks (відповідно до типів БД)
-    overall_score = clamp_float_metric(props.get("Загальна оцінка дня", {}).get("formula", {}).get("number"))
-    energy = clamp_int_metric(props.get("Енергія", {}).get("number"))
-    mood = clamp_int_metric(props.get("Настрій", {}).get("number"))
-    stress = clamp_int_metric(props.get("Стрес", {}).get("number"))
-    productivity = clamp_int_metric(props.get("Продуктивність", {}).get("number"))
-
-    return {
-        "notion_page_id": raw_json.get("id"),
-        "entry_date": entry_date,
-        "overall_score": overall_score,
-        "energy": energy,
-        "mood": mood,
-        "stress": stress,
-        "productivity": productivity,
-        "tags": tags,
-        "log_text": log_text,
-    }
+    if null_records:
+        try:
+            supabase.table("silver_journal").upsert(
+                null_records, on_conflict="entry_date"
+            ).execute()
+            print(f"Створено {len(null_records)} NULL-записів для пропущених днів у silver_journal.")
+        except Exception as e:
+            print(f"Помилка генерації NULL-записів для щоденника: {e}")
 
 
-def upsert_to_silver(supabase: Client, records: list[dict]):
-    """Робить масовий UPSERT (вставку або оновлення) у таблицю silver_journal."""
+def process_notion_transform(supabase: Client):
+    records = fetch_unprocessed_notion_records(supabase)
     if not records:
+        print("Необроблених даних у bronze_notion немає.")
         return
 
-    supabase.table("silver_journal").upsert(records, on_conflict="notion_page_id").execute()
-    print(f"Дані успішно трансформовано та збережено в silver_journal ({len(records)} записів)!")
+    processed_ids = [r["id"] for r in records]
+    all_journal_records = []
+    all_processed_dates = set()
 
+    for record in records:
+        payload = record.get("raw_payload", {})
+        j_records, p_dates = parse_notion_pages(payload)
+        all_journal_records.extend(j_records)
+        all_processed_dates.update(p_dates)
 
-def mark_as_processed(supabase: Client, record_ids: list[int]):
-    """Позначає оброблені записи у Bronze."""
-    if not record_ids:
-        return
+    # 1. Зберігаємо реальні записи у silver_journal
+    if all_journal_records:
+        try:
+            supabase.table("silver_journal").upsert(
+                all_journal_records, on_conflict="entry_date"
+            ).execute()
+            print(f"Успішно збережено {len(all_journal_records)} записів у silver_journal.")
+        except Exception as e:
+            print(f"Помилка запису у silver_journal: {e}")
 
-    supabase.table("bronze_journal").update(
-        {"is_processed": True}
-    ).in_("id", record_ids).execute()
-    print(f"Позначено {len(record_ids)} батчів у bronze_journal як is_processed = True.")
+    # 2. Заповнюємо пропущені дні NULL-значеннями (захист від забутого щоденника)
+    if all_processed_dates:
+        generate_missing_null_records(supabase, all_processed_dates)
+
+    # 3. Позначаємо батчі в Bronze як оброблені
+    try:
+        supabase.table("bronze_notion").update(
+            {"is_processed": True}
+        ).in_("id", processed_ids).execute()
+        print("Батчі в bronze_notion успішно позначено як оброблені.")
+    except Exception as e:
+        print(f"Помилка оновлення статусу в bronze_notion: {e}")
 
 
 if __name__ == "__main__":
-    print("Запускаємо трансформацію Bronze ➔ Silver для Notion...")
+    print("Запуск трансформації даних Notion...")
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-    unprocessed_records = fetch_unprocessed_records(supabase_client)
-
-    if unprocessed_records:
-        parsed_records = []
-        processed_ids = []
-
-        for record in unprocessed_records:
-            parsed_data = parse_notion_journal(record["raw_payload"])
-            if parsed_data and parsed_data.get("notion_page_id"):
-                parsed_records.append(parsed_data)
-            processed_ids.append(record["id"])
-
-        if parsed_records:
-            upsert_to_silver(supabase_client, parsed_records)
-
-        mark_as_processed(supabase_client, processed_ids)
-    else:
-        print("Усі записи в bronze_journal вже оброблені. Нових даних немає.")
+    process_notion_transform(supabase_client)
