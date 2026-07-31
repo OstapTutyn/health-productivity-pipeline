@@ -53,11 +53,14 @@ def parse_notion_page(page: dict) -> tuple[dict | None, str | None]:
 
     entry_date = datetime.fromisoformat(date_str).strftime("%Y-%m-%d")
 
-    # Витягуємо метрики та текст відповідно до назв у Supabase та Notion
+    # Витягуємо метрики, формули та текст відповідно до назв у Supabase та Notion
     energy_raw = properties.get("Енергія", {}).get("number")
     mood_raw = properties.get("Настрій", {}).get("number")
     stress_raw = properties.get("Стрес", {}).get("number")
     prod_raw = properties.get("Продуктивність", {}).get("number")
+
+    # Загальна оцінка дня (формула в Notion)
+    overall_score = properties.get("Загальна оцінка дня", {}).get("formula", {}).get("number")
 
     notes_raw = properties.get("Лог", {}).get("rich_text", [])
     log_text = "".join([n.get("plain_text", "") for n in notes_raw]) if notes_raw else None
@@ -68,6 +71,7 @@ def parse_notion_page(page: dict) -> tuple[dict | None, str | None]:
     record = {
         "notion_page_id": page_id,
         "entry_date": entry_date,
+        "overall_score": overall_score,
         "energy": clamp_int_metric(energy_raw),
         "mood": clamp_int_metric(mood_raw),
         "stress": clamp_int_metric(stress_raw),
@@ -95,6 +99,7 @@ def generate_missing_null_records(supabase: Client, processed_dates: set[str]):
         if date_str not in processed_dates:
             null_records.append({
                 "entry_date": date_str,
+                "overall_score": None,
                 "energy": None,
                 "mood": None,
                 "stress": None,
