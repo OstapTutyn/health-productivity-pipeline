@@ -44,8 +44,10 @@ def parse_notion_pages(payload: dict) -> tuple[list[dict], set[str]]:
     for page in pages:
         properties = page.get("properties", {})
 
-        # Витягуємо дату запису (адаптуй під назву своєї поля в Notion, наприклад "Date" або "Name")
-        date_str = properties.get("Date", {}).get("start")
+        # Витягуємо дату з урахуванням вкладеної структури Notion API та української назви поля
+        date_obj = properties.get("Дата", {}).get("date", {})
+        date_str = date_obj.get("start") if date_obj else None
+
         if not date_str:
             # Фолбек на дату створення, якщо дата не вказана явно
             created_time = page.get("created_time")
@@ -57,10 +59,10 @@ def parse_notion_pages(payload: dict) -> tuple[list[dict], set[str]]:
         entry_date = datetime.fromisoformat(date_str).strftime("%Y-%m-%d")
         processed_dates.add(entry_date)
 
-        # Приклад витягування міток (енергія, настрій тощо — адаптуй назви під свої властивості в Notion)
-        energy_raw = properties.get("Energy", {}).get("number")
-        mood_raw = properties.get("Mood", {}).get("number")
-        notes_raw = properties.get("Notes", {}).get("rich_text", [])
+        # Витягуємо мітки та текст за правильними назвами у Notion
+        energy_raw = properties.get("Енергія", {}).get("number")
+        mood_raw = properties.get("Настрій", {}).get("number")
+        notes_raw = properties.get("Лог", {}).get("rich_text", [])
 
         notes = "".join([n.get("plain_text", "") for n in notes_raw]) if notes_raw else None
 
