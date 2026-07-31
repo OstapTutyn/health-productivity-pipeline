@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -11,7 +11,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 
 def fetch_unprocessed_notion_records(supabase: Client) -> list[dict]:
-    """Витягує необроблені записи з bronze_journal."""
+    """Витягує необроблені нові записи з bronze_journal."""
     response = (
         supabase.table("bronze_journal")
         .select("id, raw_payload")
@@ -19,6 +19,16 @@ def fetch_unprocessed_notion_records(supabase: Client) -> list[dict]:
         .execute()
     )
     return response.data if response.data else []
+
+
+def get_existing_page_ids(supabase: Client) -> set[str]:
+    """Отримує множину вже наявних notion_page_id з silver_journal, щоб уникнути дублікатів."""
+    try:
+        response = supabase.table("silver_journal").select("notion_page_id").execute()
+        return {row["notion_page_id"] for row in response.data} if response.data else set()
+    except Exception as e:
+        print(f"Помилка отримання існуючих записів з silver_journal: {e}")
+        return set()
 
 
 def clamp_int_metric(val, min_val=1, max_val=10):
@@ -37,7 +47,6 @@ def parse_notion_page(page: dict) -> tuple[dict | None, str | None]:
     page_id = page.get("id")
     properties = page.get("properties", {})
 
-    # Витягуємо дату
     date_obj = properties.get("Дата", {}).get("date", {})
     date_str = date_obj.get("start") if date_obj else None
 
@@ -48,20 +57,17 @@ def parse_notion_page(page: dict) -> tuple[dict | None, str | None]:
         else:
             return None, None
 
-    # Сувора перевірка формату дати
     try:
         clean_date_str = str(date_str).split("T")[0]
         entry_date = datetime.strptime(clean_date_str, "%Y-%m-%d").strftime("%Y-%m-%d")
     except (ValueError, TypeError, AttributeError):
         return None, None
 
-    # Витягуємо метрики, формули та текст відповідно до назв у Supabase та Notion
     energy_raw = properties.get("Енергія", {}).get("number")
     mood_raw = properties.get("Настрій", {}).get("number")
     stress_raw = properties.get("Стрес", {}).get("number")
     prod_raw = properties.get("Продуктивність", {}).get("number")
 
-    # Загальна оцінка дня (формула в Notion)
     overall_score = properties.get("Загальна оцінка дня", {}).get("formula", {}).get("number")
 
     notes_raw = properties.get("Лог", {}).get("rich_text", [])
@@ -84,43 +90,6 @@ def parse_notion_page(page: dict) -> tuple[dict | None, str | None]:
     return record, entry_date
 
 
-def generate_missing_null_records(supabase: Client, processed_dates: set[str]):
-    """Генерує NULL-записи для днів, коли щоденник не заповнювався."""
-    if not processed_dates:
-        return
-
-    min_date_str = min(processed_dates)
-    min_date = datetime.strptime(min_date_str, "%Y-%m-%d").date()
-    today = datetime.now(timezone.utc).date()
-
-    current_date = min_date
-    null_records = []
-
-    while current_date <= today:
-        date_str = current_date.strftime("%Y-%m-%d")
-        if date_str not in processed_dates:
-            # Генеруємо стабільний унікальний UUID для пропущеного дня
-            missing_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"missing-{date_str}"))
-            null_records.append({
-                "notion_page_id": missing_uuid,
-                "entry_date": date_str,
-                "overall_score": None,
-                "energy": None,
-                "mood": None,
-                "stress": None,
-                "productivity": None,
-                "tags": [],
-                "log_text": None,
-            })
-        current_date += timedelta(days=1)
-
-    if null_records:
-        supabase.table("silver_journal").upsert(
-            null_records, on_conflict="entry_date"
-        ).execute()
-        print(f"Створено {len(null_records)} NULL-записів для пропущених днів у silver_journal.")
-
-
 def process_notion_transform(supabase: Client):
     records = fetch_unprocessed_notion_records(supabase)
     if not records:
@@ -128,29 +97,37 @@ def process_notion_transform(supabase: Client):
         return
 
     processed_ids = [r["id"] for r in records]
+    existing_page_ids = get_existing_page_ids(supabase)
     all_journal_records = []
-    all_processed_dates = set()
 
     for record in records:
         payload = record.get("raw_payload", {})
-        j_rec, p_date = parse_notion_page(payload)
+        j_rec, _ = parse_notion_page(payload)
+
         if j_rec:
-            all_journal_records.append(j_rec)
-        if p_date:
-            all_processed_dates.add(p_date)
+            page_id = j_rec["notion_page_id"]
+            # Якщо запису ще немає в silver_journal — додаємо його
+            if page_id not in existing_page_ids:
+                all_journal_records.append(j_rec)
+                existing_page_ids.add(page_id)
+                можна
+                додати
+                щоб
+                уникнути
+                дублів
+                усередині
+                батчу
+            else:
+                print(f"Запис з notion_page_id {page_id} вже існує в silver_journal. Пропускаємо.")
 
-    # 1. Зберігаємо реальні записи у silver_journal
+    # Зберігаємо лише нові унікальні записи у silver_journal
     if all_journal_records:
-        supabase.table("silver_journal").upsert(
-            all_journal_records, on_conflict="notion_page_id"
-        ).execute()
-        print(f"Успішно збережено {len(all_journal_records)} записів у silver_journal.")
+        supabase.table("silver_journal").insert(all_journal_records).execute()
+        print(f"Успішно додано {len(all_journal_records)} нових записів у silver_journal.")
+    else:
+        print("Нових унікальних записів для додавання немає.")
 
-    # 2. Заповнюємо пропущені дні NULL-значеннями з унікальними ID
-    if all_processed_dates:
-        generate_missing_null_records(supabase, all_processed_dates)
-
-    # 3. Позначаємо рядки в bronze_journal як оброблені
+    # Позначаємо рядки в bronze_journal як оброблені
     supabase.table("bronze_journal").update(
         {"is_processed": True}
     ).in_("id", processed_ids).execute()
