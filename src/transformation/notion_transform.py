@@ -11,17 +11,13 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 def fetch_unprocessed_notion_records(supabase: Client) -> list[dict]:
     """Витягує необроблені записи з bronze_journal."""
-    try:
-        response = (
-            supabase.table("bronze_journal")
-            .select("id, raw_payload")
-            .eq("is_processed", False)
-            .execute()
-        )
-        return response.data if response.data else []
-    except Exception as e:
-        print(f"Помилка отримання даних з bronze_journal: {e}")
-        return []
+    response = (
+        supabase.table("bronze_journal")
+        .select("id, raw_payload")
+        .eq("is_processed", False)
+        .execute()
+    )
+    return response.data if response.data else []
 
 
 def clamp_int_metric(val, min_val=1, max_val=10):
@@ -110,13 +106,10 @@ def generate_missing_null_records(supabase: Client, processed_dates: set[str]):
         current_date += timedelta(days=1)
 
     if null_records:
-        try:
-            supabase.table("silver_journal").upsert(
-                null_records, on_conflict="entry_date"
-            ).execute()
-            print(f"Створено {len(null_records)} NULL-записів для пропущених днів у silver_journal.")
-        except Exception as e:
-            print(f"Помилка генерації NULL-записів для щоденника: {e}")
+        supabase.table("silver_journal").upsert(
+            null_records, on_conflict="entry_date"
+        ).execute()
+        print(f"Створено {len(null_records)} NULL-записів для пропущених днів у silver_journal.")
 
 
 def process_notion_transform(supabase: Client):
@@ -135,30 +128,24 @@ def process_notion_transform(supabase: Client):
         if j_rec:
             all_journal_records.append(j_rec)
         if p_date:
-            all_processed_dates.add(p_date)
+            all_processed_dates.update(p_date)
 
-    # 1. Зберігаємо реальні записи у silver_journal за унікальним notion_page_id
+    # 1. Зберігаємо реальні записи у silver_journal (без try-except, щоб бачити помилки в логах)
     if all_journal_records:
-        try:
-            supabase.table("silver_journal").upsert(
-                all_journal_records, on_conflict="notion_page_id"
-            ).execute()
-            print(f"Успішно збережено {len(all_journal_records)} записів у silver_journal.")
-        except Exception as e:
-            print(f"Помилка запису у silver_journal: {e}")
+        supabase.table("silver_journal").upsert(
+            all_journal_records, on_conflict="notion_page_id"
+        ).execute()
+        print(f"Успішно збережено {len(all_journal_records)} записів у silver_journal.")
 
     # 2. Заповнюємо пропущені дні NULL-значеннями
     if all_processed_dates:
         generate_missing_null_records(supabase, all_processed_dates)
 
-    # 3. Позначаємо рядки в bronze_journal як оброблені
-    try:
-        supabase.table("bronze_journal").update(
-            {"is_processed": True}
-        ).in_("id", processed_ids).execute()
-        print("Записи в bronze_journal успішно позначено як оброблені.")
-    except Exception as e:
-        print(f"Помилка оновлення статусу в bronze_journal: {e}")
+    # 3. Позначаємо рядки в bronze_journal як оброблені тільки якщо вставка пройшла успішно
+    supabase.table("bronze_journal").update(
+        {"is_processed": True}
+    ).in_("id", processed_ids).execute()
+    print("Записи в bronze_journal успішно позначено як оброблені.")
 
 
 if __name__ == "__main__":
