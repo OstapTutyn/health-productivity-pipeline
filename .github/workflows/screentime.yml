@@ -1,0 +1,26 @@
+name: Screen Time Pipeline
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  run-screentime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Run Screen Time Ingestion & Transformation
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python src/ingestion/screentime_ingest.py
+          python src/ingestion/iphone_ingest.py
+          python src/transformation/screentime_to_events.py
+          python src/transformation/screentime_to_hourly.py
