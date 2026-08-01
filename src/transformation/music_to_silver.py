@@ -69,7 +69,6 @@ def process_music_transform(supabase: Client):
                 "artist_name": artist,
                 "album_name": album,
                 "genre": genre,
-                "duration_seconds": int(track.get("duration", 180)),
                 "source": "lastfm"
             })
 
