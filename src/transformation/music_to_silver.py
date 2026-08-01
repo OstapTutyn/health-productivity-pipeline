@@ -11,12 +11,12 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 def process_music_transform(supabase: Client):
     response = (
-            supabase.table("bronze_music")
-            .select("id, raw_payload")
-            .eq("is_processed", False)
-            .execute()
+        supabase.table("bronze_music")
+        .select("id, raw_payload")
+        .eq("is_processed", False)
+        .execute()
     )
-    records = response.data if response.data else[]
+    records = response.data if response.data else []
     if not records:
         print("Необроблених даних у bronze_music немає.")
         return
@@ -24,7 +24,6 @@ def process_music_transform(supabase: Client):
     processed_ids = []
     all_tracks = []
 
-    # Встановлюємо київську часову зону
     kyiv_tz = ZoneInfo("Europe/Kyiv")
 
     for record in records:
@@ -42,10 +41,10 @@ def process_music_transform(supabase: Client):
             if not uts or not track_name or not artist:
                 continue
 
-            # Конвертуємо UTC timestamp у київський час
+            # Конвертуємо UTC timestamp у київський час (+03:00)
             played_at_dt = datetime.fromtimestamp(int(uts), tz=timezone.utc).astimezone(kyiv_tz)
-            played_at_str = played_at_dt.isoformat()  # Збережеться зі зміщенням +03:00
-            entry_date_str = str(played_at_dt.date())  # Дата тепер визначатиметься за Києвом
+            played_at_str = played_at_dt.isoformat()
+            entry_date_str = str(played_at_dt.date())
 
             all_tracks.append({
                 "played_at": played_at_str,
