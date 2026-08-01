@@ -15,11 +15,11 @@ def process_music_transform(supabase: Client):
             .select("id, raw_payload")
             .eq("is_processed", False)
             .execute()
-            >
-            records = response.data if response.data else[]
+    )
+    records = response.data if response.data else[]
     if not records:
-    print("Необроблених даних у bronze_music немає.")
-    return
+        print("Необроблених даних у bronze_music немає.")
+        return
 
     processed_ids = []
     all_tracks = []
