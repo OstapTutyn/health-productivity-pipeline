@@ -49,7 +49,7 @@ def get_watermark(supabase: Client) -> str:
                 if timestamps:
                     return max(timestamps)
     except Exception as e:
-        print(f"⚠️ Не вдалося отримати вотермарк з бази: {e}")
+        print(f"Не вдалося отримати вотермарк з бази: {e}")
 
     default_start = datetime.now(timezone.utc) - timedelta(days=7)
     return default_start.isoformat()
@@ -63,7 +63,7 @@ def fetch_screentime_events(start_time: str) -> list[dict]:
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"❌ Помилка з'єднання з ActivityWatch (перевір, чи запущений додаток): {e}")
+        print(f"Помилка з'єднання з ActivityWatch (перевір, чи запущений додаток): {e}")
         return []
 
 
@@ -91,7 +91,7 @@ def group_events_by_logical_day(events: list[dict]) -> dict[str, list[dict]]:
 def insert_chunks_to_bronze(supabase: Client, chunks: dict[str, list[dict]]):
     """Зберігає кожен логічний день як окремий батч у бронзовий шар."""
     if not chunks:
-        print("⚠️ Немає нових подій для запису.")
+        print("Немає нових подій для запису.")
         return
 
     for logical_date, day_events in sorted(chunks.items()):
@@ -105,19 +105,19 @@ def insert_chunks_to_bronze(supabase: Client, chunks: dict[str, list[dict]]):
 
         supabase.table("bronze_screentime").insert({"raw_payload": payload, "logical_date": logical_date}).execute()
         print(
-            f"✅ Успішно завантажено чанк за логічну дату {logical_date} ({len(day_events)} подій) у bronze_screentime.")
+            f"Успішно завантажено чанк за логічну дату {logical_date} ({len(day_events)} подій) у bronze_screentime.")
 
 
 if __name__ == "__main__":
     if check_already_ran_today():
-        print("⏸️ Скрипт вже виконувався сьогодні. Пропускаємо.")
+        print("Скрипт вже виконувався сьогодні. Пропускаємо.")
         exit(0)
 
-    print("⏳ Отримуємо дані про екранний час з ActivityWatch...")
+    print("Отримуємо дані про екранний час з ActivityWatch...")
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
     watermark = get_watermark(supabase_client)
-    print(f"📌 Останній відомий час у базі (watermark): {watermark}")
+    print(f"Останній відомий час у базі (watermark): {watermark}")
 
     events = fetch_screentime_events(watermark)
 
@@ -125,7 +125,7 @@ if __name__ == "__main__":
         chunks = group_events_by_logical_day(events)
         insert_chunks_to_bronze(supabase_client, chunks)
         save_run_date()
-        print("🎉 Локальну інгестію екранного часу успішно завершено!")
+        print("Локальну інгестію екранного часу успішно завершено!")
     else:
-        print("ℹ️ Нових подій у ActivityWatch не знайдено.")
+        print("Нових подій у ActivityWatch не знайдено.")
         save_run_date()

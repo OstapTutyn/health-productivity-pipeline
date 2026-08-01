@@ -10,7 +10,7 @@ TODAY=$(date +%Y-%m-%d)
 if [ -f "$LOCK_FILE" ]; then
     LAST_RUN=$(cat "$LOCK_FILE")
     if [ "$LAST_RUN" = "$TODAY" ]; then
-        echo "⏸️ Скрипт вже виконувався сьогодні ($TODAY). Пропускаємо."
+        echo "Скрипт вже виконувався сьогодні ($TODAY). Пропускаємо."
         exit 0
     fi
 fi
@@ -18,7 +18,7 @@ fi
 # 2. Активуємо віртуальне середовище та запускаємо обидва збори
 source .venv/bin/activate
 
-echo "🚀 Перший запуск ноута за сьогодні ($TODAY). Збираємо дані..."
+echo "Перший запуск ноута за сьогодні ($TODAY). Збираємо дані..."
 
 python src/ingestion/screentime_ingest.py
 

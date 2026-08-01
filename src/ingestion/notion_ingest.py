@@ -39,7 +39,7 @@ def update_notion_watermark(supabase: Client, pages: list[dict]):
         supabase.table("etl_watermarks").update({
             "last_extracted_timestamp": max_ts
         }).eq("source_name", "notion_journal").execute()
-        print(f"💧 Watermark для 'notion_journal' успішно оновлено до {max_ts}")
+        print(f"Watermark для 'notion_journal' успішно оновлено до {max_ts}")
     except Exception as e:
         print(f"Помилка оновлення watermark: {e}")
 

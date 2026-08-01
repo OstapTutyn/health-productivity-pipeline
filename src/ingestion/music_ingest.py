@@ -102,7 +102,7 @@ def insert_music_to_bronze(supabase: Client, tracks: list[dict]) -> bool:
 
 
 if __name__ == "__main__":
-    print("⏳ Перевірка нових треків на Last.fm...")
+    print("Перевірка нових треків на Last.fm...")
     if not LASTFM_API_KEY or not LASTFM_USERNAME:
         print("Помилка: LASTFM_API_KEY або LASTFM_USERNAME не вказані в .env")
         exit(1)

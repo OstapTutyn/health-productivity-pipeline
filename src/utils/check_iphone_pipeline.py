@@ -24,7 +24,7 @@ def inspect_iphone_pipeline():
         .execute()
 
     if not res.data:
-        print("❌ Жодного батчу для 'iPhone 13' у bronze_screentime не знайдено!")
+        print("Жодного батчу для 'iPhone 13' у bronze_screentime не знайдено!")
         return
 
     latest_batch = res.data[0]

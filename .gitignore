@@ -21,3 +21,4 @@ logs/
 .DS_Store
 
 trash/
+.last_run_date
