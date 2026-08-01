@@ -34,6 +34,21 @@ def process_music_transform(supabase: Client):
             date_info = track.get("date", {})
             uts = date_info.get("uts")
 
+            if not uts or not track_name or not artist:
+                continue
+
+            played_at_dt = datetime.fromtimestamp(int(uts), tz=timezone.utc)
+            played_at_str = played_at_dt.isoformat()
+            entry_date_str = str(played_at_dt.date())
+
+            all_tracks.append({
+                "played_at": played_at_str,
+                "entry_date": entry_date_str,
+                "track_name": track_name,
+                "artist_name": artist,
+                "album_name": album
+            })
+
     chunk_size = 500
     if all_tracks:
         for i in range(0, len(all_tracks), chunk_size):
