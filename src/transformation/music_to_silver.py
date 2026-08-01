@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -7,20 +8,24 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+
 def process_music_transform(supabase: Client):
     response = (
-        supabase.table("bronze_music")
-        .select("id, raw_payload")
-        .eq("is_processed", False)
-        .execute()
-    )
-    records = response.data if response.data else []
+            supabase.table("bronze_music")
+            .select("id, raw_payload")
+            .eq("is_processed", False)
+            .execute()
+            >
+            records = response.data if response.data else[]
     if not records:
-        print("Необроблених даних у bronze_music немає.")
-        return
+    print("Необроблених даних у bronze_music немає.")
+    return
 
     processed_ids = []
     all_tracks = []
+
+    # Встановлюємо київську часову зону
+    kyiv_tz = ZoneInfo("Europe/Kyiv")
 
     for record in records:
         processed_ids.append(record["id"])
@@ -37,9 +42,10 @@ def process_music_transform(supabase: Client):
             if not uts or not track_name or not artist:
                 continue
 
-            played_at_dt = datetime.fromtimestamp(int(uts), tz=timezone.utc)
-            played_at_str = played_at_dt.isoformat()
-            entry_date_str = str(played_at_dt.date())
+            # Конвертуємо UTC timestamp у київський час
+            played_at_dt = datetime.fromtimestamp(int(uts), tz=timezone.utc).astimezone(kyiv_tz)
+            played_at_str = played_at_dt.isoformat()  # Збережеться зі зміщенням +03:00
+            entry_date_str = str(played_at_dt.date())  # Дата тепер визначатиметься за Києвом
 
             all_tracks.append({
                 "played_at": played_at_str,
@@ -60,6 +66,7 @@ def process_music_transform(supabase: Client):
 
     supabase.table("bronze_music").update({"is_processed": True}).in_("id", processed_ids).execute()
     print("Батчі в bronze_music успішно позначено як оброблені.")
+
 
 if __name__ == "__main__":
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
