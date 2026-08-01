@@ -14,6 +14,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/fitness.heart_rate.read'
 ]
 
+
 def get_google_credentials():
     creds = None
     if os.path.exists('token.json'):
@@ -29,6 +30,7 @@ def get_google_credentials():
         with open('token.json', 'w') as token_file:
             token_file.write(creds.to_json())
     return creds
+
 
 if __name__ == "__main__":
     load_dotenv()
@@ -56,18 +58,37 @@ if __name__ == "__main__":
     }
     hourly_resp = service.users().dataset().aggregate(userId="me", body=hourly_payload).execute()
 
-    # 2. Запит сну
-    daily_payload = {
-        "aggregateBy": [{"dataTypeName": "com.google.sleep.segment"}],
-        "bucketByTime": {"durationMillis": 86400000},
-        "startTimeMillis": int(start_time_daily.timestamp() * 1000),
-        "endTimeMillis": int(now.timestamp() * 1000)
-    }
-    daily_resp = service.users().dataset().aggregate(userId="me", body=daily_payload).execute()
+    # Погодинні дані додаємо завжди (оскільки вони оновлюються протягом дня)
+    payloads_to_insert = [
+        {"source": "google_fit_hourly", "raw_payload": {"import_time": now.isoformat(), "data": hourly_resp}}
+    ]
+
+    # 2. Перевірка: чи вже затягували `google_fit_daily` сьогодні
+    today_str = now.strftime('%Y-%m-%d')
+    existing_daily = supabase_client.table("bronze_health") \
+        .select("id") \
+        .eq("source", "google_fit_daily") \
+        .gte("inserted_at", f"{today_str}T00:00:00") \
+        .execute()
+
+    # Якщо за сьогодні ще не було запису daily — робимо запит і додаємо
+    if not existing_daily.data:
+        daily_payload = {
+            "aggregateBy": [{"dataTypeName": "com.google.sleep.segment"}],
+            "bucketByTime": {"durationMillis": 86400000},
+            "startTimeMillis": int(start_time_daily.timestamp() * 1000),
+            "endTimeMillis": int(now.timestamp() * 1000)
+        }
+        daily_resp = service.users().dataset().aggregate(userId="me", body=daily_payload).execute()
+
+        payloads_to_insert.append(
+            {"source": "google_fit_daily", "raw_payload": {"import_time": now.isoformat(), "data": daily_resp}}
+        )
+        print("Добові дані (сон) успішно додано до черги інгестії.")
+    else:
+        print("Добові дані (сон) за сьогодні вже існують у bronze_health. Пропускаємо запит.")
 
     # Зберігаємо у Bronze
-    supabase_client.table("bronze_health").insert([
-        {"source": "google_fit_hourly", "raw_payload": {"import_time": now.isoformat(), "data": hourly_resp}},
-        {"source": "google_fit_daily", "raw_payload": {"import_time": now.isoformat(), "data": daily_resp}}
-    ]).execute()
-    print("Сирі дані здоров'я успішно записані в bronze_health!")
+    if payloads_to_insert:
+        supabase_client.table("bronze_health").insert(payloads_to_insert).execute()
+        print("Сирі дані здоров'я успішно записані в bronze_health!")

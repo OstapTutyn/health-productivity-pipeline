@@ -103,7 +103,7 @@ def insert_chunks_to_bronze(supabase: Client, chunks: dict[str, list[dict]]):
             "events": day_events
         }
 
-        supabase.table("bronze_screentime").insert({"raw_payload": payload}).execute()
+        supabase.table("bronze_screentime").insert({"raw_payload": payload, "logical_date": logical_date}).execute()
         print(
             f"✅ Успішно завантажено чанк за логічну дату {logical_date} ({len(day_events)} подій) у bronze_screentime.")
 

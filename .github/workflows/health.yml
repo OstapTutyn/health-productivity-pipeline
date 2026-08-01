@@ -2,7 +2,7 @@ name: Health Pipeline
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '15 21 * * *'  # 00:15 за київським часом (21:15 UTC)
   workflow_dispatch:
 
 jobs:
@@ -21,10 +21,9 @@ jobs:
           echo '${{ secrets.GOOGLE_CLIENT_SECRET_JSON }}' > client_secret.json
           echo '${{ secrets.GOOGLE_TOKEN_JSON }}' > token.json
 
-      - name: Run Health Ingestion & Transformation
+      - name: Run Health Transformation
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          python src/ingestion/google_fit_ingest.py
           python src/transformation/health_transform.py
