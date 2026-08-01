@@ -37,7 +37,6 @@ def process_music_transform(supabase: Client):
 
     processed_ids = []
     all_tracks = []
-    hourly_aggregates = {}
 
     for record in records:
         processed_ids.append(record["id"])
@@ -72,17 +71,6 @@ def process_music_transform(supabase: Client):
                 "source": "lastfm"
             })
 
-            hourly_ts = played_at_dt.replace(minute=0, second=0, microsecond=0).isoformat()
-            if hourly_ts not in hourly_aggregates:
-                hourly_aggregates[hourly_ts] = {
-                    "hourly_timestamp": hourly_ts,
-                    "entry_date": entry_date_str,
-                    "tracks_count": 0,
-                    "dominant_artist": artist,
-                    "dominant_genre": genre
-                }
-            hourly_aggregates[hourly_ts]["tracks_count"] += 1
-
     chunk_size = 500
     if all_tracks:
         for i in range(0, len(all_tracks), chunk_size):
@@ -91,15 +79,6 @@ def process_music_transform(supabase: Client):
                 chunk, on_conflict="artist_name,track_name,played_at"
             ).execute()
         print(f"Успішно збережено {len(all_tracks)} треків у stg_music_tracks!")
-
-    hourly_list = list(hourly_aggregates.values())
-    if hourly_list:
-        for i in range(0, len(hourly_list), chunk_size):
-            chunk = hourly_list[i:i + chunk_size]
-            supabase.table("stg_music_hourly").upsert(
-                chunk, on_conflict="hourly_timestamp"
-            ).execute()
-        print(f"Успішно збережено {len(hourly_list)} записів у stg_music_hourly!")
 
     supabase.table("bronze_music").update({"is_processed": True}).in_("id", processed_ids).execute()
     print("Батчі в bronze_music успішно позначено як оброблені.")
