@@ -23,4 +23,3 @@ jobs:
           python src/ingestion/screentime_ingest.py
           python src/ingestion/iphone_ingest.py
           python src/transformation/screentime_to_events.py
-          python src/transformation/screentime_to_hourly.py
