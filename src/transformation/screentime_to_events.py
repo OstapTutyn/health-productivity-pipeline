@@ -1,5 +1,6 @@
 import os
 import re
+from datetime import datetime
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -21,19 +22,23 @@ def fetch_unprocessed_records(supabase: Client) -> list[dict]:
 
 
 def parse_app_or_website(app_name: str, window_title: str) -> str:
-    """Гнучко витягує назву сайту або очищує заголовок вікна браузера."""
-    browsers = ["chrome", "safari", "arc", "firefox", "brave", "edge"]
+    """Гнучко витягує назву сайту або очищує заголовок вікна браузера та технічні bundle ID."""
+    browsers = ["chrome", "safari", "arc", "firefox", "brave", "edge", "google chrome"]
     app_lower = app_name.lower()
 
-    # Перевіряємо, чи це браузер (незалежно від регістру)
     is_browser = any(b in app_lower for b in browsers)
 
     if not is_browser or not window_title:
+        # Гарно форматуємо системні додатки (наприклад, com.jetbrains.pycharm -> PyCharm)
+        if app_name.startswith("com."):
+            parts = app_name.split(".")
+            if len(parts) >= 3:
+                return parts[-1].capitalize()
         return app_name
 
     title_lower = window_title.lower()
 
-    # Чіткі ключові слова для твоїх основних робочих сервісів
+    # Чіткі ключові слова для твоїх основних сервісів
     if "gemini" in title_lower:
         return "Google Gemini"
     elif "github" in title_lower:
@@ -55,7 +60,7 @@ def parse_app_or_website(app_name: str, window_title: str) -> str:
     elif "stackoverflow" in title_lower:
         return "Stack Overflow"
 
-    # Якщо це інша сторінка — очищуємо суфікс браузера із заголовка (наприклад, " - Google Chrome")
+    # Очищуємо суфікс браузера із заголовка
     clean_title = window_title
     for suffix in [" - google chrome", " - safari", " - arc", " - firefox", " - brave", " - microsoft edge"]:
         if clean_title.lower().endswith(suffix):
@@ -65,36 +70,15 @@ def parse_app_or_website(app_name: str, window_title: str) -> str:
     if clean_title and len(clean_title.strip()) > 0:
         return clean_title.strip()
 
-    # Запасний варіант через домен
     domain_match = re.search(r"([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", window_title)
     if domain_match:
         return domain_match.group(1)
 
-    return f"{app_name} (Web)"
-
-
-def get_app_category(app_or_site: str) -> str:
-    """Визначає категорію за допомогою пошуку ключових слів (підтримує чисті назви вікон)."""
-    site_lower = app_or_site.lower()
-
-    if any(w in site_lower for w in ["pycharm", "vs code", "terminal", "github", "localhost", "supabase", "sublime"]):
-        return "Development"
-    elif any(w in site_lower for w in ["gemini", "chatgpt", "openai"]):
-        return "AI / Research"
-    elif any(w in site_lower for w in ["google search", "translate", "перекладач", "stackoverflow", "wikipedia"]):
-        return "Browsing / Research"
-    elif any(w in site_lower for w in ["notion"]):
-        return "Productivity"
-    elif any(w in site_lower for w in ["telegram", "discord", "slack"]):
-        return "Communication"
-    elif any(w in site_lower for w in ["youtube", "music", "apple music", "netflix", "twitch"]):
-        return "Entertainment"
-
-    return "Other"
+    return "Google Chrome" if "chrome" in app_lower else f"{app_name} (Web)"
 
 
 def transform_to_events(payload: dict) -> list[dict]:
-    """Розпаковує сирий payload у список очищених, дедуплікованих подій із розпізнаванням сайтів."""
+    """Розпаковує сирий payload у список очищених, дедуплікованих подій із гарними назвами."""
     events = payload.get("events", [])
     device = payload.get("device", "Unknown device")
 
@@ -110,7 +94,7 @@ def transform_to_events(payload: dict) -> list[dict]:
         if duration <= 0 or duration > 86400:
             continue
 
-        # --- РОЗПІЗНАВАННЯ САЙТІВ ---
+        # --- РОЗПІЗНАВАННЯ ТА ОЧИЩЕННЯ ---
         parsed_app_name = parse_app_or_website(raw_app, window_title)
 
         # Ключ для унікальності
@@ -118,7 +102,7 @@ def transform_to_events(payload: dict) -> list[dict]:
 
         unique_events[key] = {
             "device": device,
-            "app_name": parsed_app_name,  # Тепер тут буде GitHub, YouTube або конкретний домен
+            "app_name": parsed_app_name,
             "window_title": window_title,
             "started_at": started_at,
             "duration_seconds": duration,
@@ -128,7 +112,7 @@ def transform_to_events(payload: dict) -> list[dict]:
 
 
 def upsert_to_silver(supabase: Client, events: list[dict]):
-    """Завантажує масив подій у stg_screentime_events (Silver Layer)."""
+    """Завантажує детальні події у stg_screentime_events."""
     if not events:
         return
 
@@ -137,11 +121,11 @@ def upsert_to_silver(supabase: Client, events: list[dict]):
         .upsert(events, on_conflict="device,started_at,app_name")
         .execute()
     )
-    print(f"Успішно збережено {len(events)} деталей у stg_screentime_events!")
+    print(f"Успішно збережено {len(events)} подій у stg_screentime_events!")
 
 
 def mark_as_processed(supabase: Client, record_ids: list[int]):
-    """Позначає оброблені батчі у Bronze."""
+    """Позначає оброблені батчі у Bronze як завершені."""
     if not record_ids:
         return
 
@@ -170,5 +154,6 @@ if __name__ == "__main__":
             upsert_to_silver(supabase_client, all_clean_events)
 
         mark_as_processed(supabase_client, processed_ids)
+        print("ТРАНСФОРМАЦІЮ УСПІШНО ЗАВЕРШЕНО!")
     else:
         print("Усі записи в bronze_screentime вже оброблені. Нових даних немає.")
