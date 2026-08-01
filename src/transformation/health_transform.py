@@ -58,7 +58,9 @@ def process_health_data(supabase: Client):
                 "heart_rate_avg": None,
                 "exercise_min": None,
             }
-          hourly_data_map[key]["step_count"] += qty
+          hourly_data_map[key]["step_count"] += int(
+              round(qty)
+          )
 
       elif name == "active_energy":
         for item in metric_data:
