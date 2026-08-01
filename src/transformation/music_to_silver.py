@@ -7,22 +7,6 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-def clean_genre(tag: str) -> str:
-    tag_lower = tag.lower()
-    if any(w in tag_lower for w in ["electronic", "techno", "house", "edm", "synth", "trance", "ambient"]):
-        return "Electronic"
-    elif any(w in tag_lower for w in ["rock", "metal", "grunge", "punk", "alternative"]):
-        return "Rock / Metal"
-    elif any(w in tag_lower for w in ["pop", "synth-pop", "indie pop"]):
-        return "Pop"
-    elif any(w in tag_lower for w in ["hip-hop", "rap", "trap", "hip hop"]):
-        return "Hip-Hop / Rap"
-    elif any(w in tag_lower for w in ["jazz", "blues"]):
-        return "Jazz / Blues"
-    elif any(w in tag_lower for w in ["classical", "orchestral", "piano"]):
-        return "Classical"
-    return "Other"
-
 def process_music_transform(supabase: Client):
     response = (
         supabase.table("bronze_music")
@@ -49,27 +33,6 @@ def process_music_transform(supabase: Client):
             album = track.get("album", {}).get("#text") or track.get("album", {}).get("name")
             date_info = track.get("date", {})
             uts = date_info.get("uts")
-
-            if not uts or not track_name or not artist:
-                continue
-
-            played_at_dt = datetime.fromtimestamp(int(uts), tz=timezone.utc)
-            played_at_str = played_at_dt.isoformat()
-            entry_date_str = str(played_at_dt.date())
-
-            tags = track.get("toptags", {}).get("tag", [])
-            raw_tag = tags[0].get("name") if tags and isinstance(tags, list) else "Other"
-            genre = clean_genre(raw_tag)
-
-            all_tracks.append({
-                "played_at": played_at_str,
-                "entry_date": entry_date_str,
-                "track_name": track_name,
-                "artist_name": artist,
-                "album_name": album,
-                "genre": genre,
-                "source": "lastfm"
-            })
 
     chunk_size = 500
     if all_tracks:
