@@ -109,14 +109,7 @@ def process_notion_transform(supabase: Client):
             # Якщо запису ще немає в silver_journal — додаємо його
             if page_id not in existing_page_ids:
                 all_journal_records.append(j_rec)
-                existing_page_ids.add(page_id)
-                можна
-                додати
-                щоб
-                уникнути
-                дублів
-                усередині
-                батчу
+                existing_page_ids.add(page_id)  # уникнути дублів усередині батчу
             else:
                 print(f"Запис з notion_page_id {page_id} вже існує в silver_journal. Пропускаємо.")
 
