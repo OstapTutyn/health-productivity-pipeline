@@ -11,7 +11,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 def fetch_unprocessed_records(supabase: Client) -> list[dict]:
   res = (
       supabase.table("bronze_health")
-      .select("id, raw_payload, source")
+      .select("id, raw_payload")  # <-- прибрали 'source'
       .eq("is_processed", False)
       .execute()
   )
