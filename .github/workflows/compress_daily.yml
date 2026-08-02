@@ -1,0 +1,87 @@
+name: Compress Daily AI Summary
+
+on:
+  schedule:
+    - cron: '0 4 * * *'  # 4:00 UTC = 6:00 ранку за київським часом (улітку)
+
+jobs:
+  run-compression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary
+
+      - name: Run compression script
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          python -c "
+          import os
+          import psycopg2
+
+          conn = psycopg2.connect(os.environ['SUPABASE_DB_URL'])
+          cur = conn.cursor()
+          
+          insert_query = '''
+          INSERT INTO gold_ai_daily_compressed (
+              summary_date, hours_list, steps_hourly, heart_rate_hourly, 
+              calories_hourly, exercise_hourly, screentime_hourly, music_hourly,
+              sleep_duration_min, deep_sleep_min, rem_sleep_min, sleep_onset_time, 
+              sleep_wake_time, hrv_rmssd, overall_score, energy, mood, stress, 
+              productivity, journal_tags, journal_content, total_screentime_min, 
+              productive_screentime_min, total_tracks_played
+          )
+          SELECT 
+              \"Дата\" AS summary_date,
+              string_agg(\"Година\", ' | ' ORDER BY \"Година\") AS hours_list,
+              string_agg(\"Кроки за годину\"::text, ' | ' ORDER BY \"Година\") AS steps_hourly,
+              string_agg(COALESCE(\"Сер. пульс\"::text, '-'), ' | ' ORDER BY \"Година\") AS heart_rate_hourly,
+              string_agg(COALESCE(\"Ккал\"::text, '0'), ' | ' ORDER BY \"Година\") AS calories_hourly,
+              string_agg(\"Хв тренувань\"::text, ' | ' ORDER BY \"Година\") AS exercise_hourly,
+              string_agg(\"Використані додатки та хвилини\", ' || ' ORDER BY \"Година\") AS screentime_hourly,
+              string_agg(\"Прослухані треки\", ' || ' ORDER BY \"Година\") AS music_hourly,
+              MAX(\"Сон загалом (хв)\"),
+              MAX(\"Глибокий сон (хв)\"),
+              MAX(\"REM сон (хв)\"),
+              MAX(\"Час засинання\"::timestamp),
+              MAX(\"Час прокидання\"::timestamp),
+              MAX(\"HRV (день)\"),
+              MAX(\"Оцінка дня\"),
+              MAX(\"Енергія (щоденник)\"),
+              MAX(\"Настрій (щоденник)\"),
+              MAX(\"Стрес (щоденник)\"),
+              MAX(\"Продуктивність (щоденник)\"),
+              MAX(\"Теги щоденника\"),
+              MAX(\"Текст щоденника\"),
+              MAX(\"Загальний екранний час (день)\"),
+              MAX(\"Продуктивний екранний час (день)\"),
+              MAX(\"Прослуховано треків (день)\")
+          FROM gold_ai_yesterday_hourly_summary
+          GROUP BY \"Дата\"
+          ON CONFLICT (summary_date) DO UPDATE SET
+              hours_list = EXCLUDED.hours_list,
+              steps_hourly = EXCLUDED.steps_hourly,
+              heart_rate_hourly = EXCLUDED.heart_rate_hourly,
+              calories_hourly = EXCLUDED.calories_hourly,
+              exercise_hourly = EXCLUDED.exercise_hourly,
+              screentime_hourly = EXCLUDED.screentime_hourly,
+              music_hourly = EXCLUDED.music_hourly,
+              sleep_duration_min = EXCLUDED.sleep_duration_min,
+              overall_score = EXCLUDED.overall_score,
+              journal_content = EXCLUDED.journal_content;
+          '''
+          
+          cur.execute(insert_query)
+          conn.commit()
+          cur.close()
+          conn.close()
+          print('Successfully compressed yesterday summary into gold_ai_daily_compressed!')
+          "

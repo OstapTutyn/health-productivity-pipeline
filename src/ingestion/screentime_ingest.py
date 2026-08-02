@@ -4,16 +4,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 import requests
+import time
 from supabase import create_client, Client
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+LOCK_FILE = BASE_DIR / ".last_run_date"
+
+# Указуй шлях до .env явно
+load_dotenv(BASE_DIR / ".env")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 AW_BUCKET_ID = "aw-watcher-window_MacBook-Air-Ostap.local"
 AW_URL = f"http://localhost:5600/api/0/buckets/{AW_BUCKET_ID}/events"
-
-LOCK_FILE = Path(".last_run_date")
 
 
 def check_already_ran_today() -> bool:
@@ -108,7 +111,11 @@ def insert_chunks_to_bronze(supabase: Client, chunks: dict[str, list[dict]]):
             f"Успішно завантажено чанк за логічну дату {logical_date} ({len(day_events)} подій) у bronze_screentime.")
 
 
+
 if __name__ == "__main__":
+    # Даємо системі, інтернету та ActivityWatch 10-15 секунд на повний запуск після логіну
+    time.sleep(15)
+
     if check_already_ran_today():
         print("Скрипт вже виконувався сьогодні. Пропускаємо.")
         exit(0)
@@ -117,15 +124,13 @@ if __name__ == "__main__":
     supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
     watermark = get_watermark(supabase_client)
-    print(f"Останній відомий час у базі (watermark): {watermark}")
-
     events = fetch_screentime_events(watermark)
 
     if events:
         chunks = group_events_by_logical_day(events)
         insert_chunks_to_bronze(supabase_client, chunks)
-        save_run_date()
+        save_run_date()  # Зберігаємо лок ТІЛЬКИ якщо реально зберегли дані
         print("Локальну інгестію екранного часу успішно завершено!")
     else:
-        print("Нових подій у ActivityWatch не знайдено.")
-        save_run_date()
+        print("Нових подій у ActivityWatch не знайдено або сервіс ще не готовий.")
+        # НЕ викликаємо тут save_run_date(), щоб дати шанс скрипту відпрацювати пізніше, коли AW заведеться

@@ -1,0 +1,176 @@
+-- 1. Видаляємо стару в'юшку
+DROP VIEW IF EXISTS gold_ai_yesterday_hourly_summary;
+
+-- 2. Створюємо оновлену в'юшку з використанням готової колонки з таблиці
+CREATE VIEW gold_ai_yesterday_hourly_summary AS
+WITH target_day AS (
+    SELECT (CURRENT_DATE - INTERVAL '1 day')::date AS d
+),
+hours AS (
+    SELECT generate_series(
+        (SELECT d FROM target_day)::timestamp,
+        (SELECT d FROM target_day)::timestamp + INTERVAL '23 hours',
+        INTERVAL '1 hour'
+    ) AS hour_start
+),
+-- 1. Погодинні базові метрики здоров'я
+health_hourly AS (
+    SELECT
+        date_trunc('hour', start_time) AS h_time,
+        sum(step_count) AS step_count,
+        round(avg(heart_rate_avg)::numeric, 1) AS heart_rate_avg,
+        round(sum(active_energy_kcal)::numeric, 1) AS active_energy_kcal,
+        sum(exercise_min) AS exercise_min
+    FROM health_hourly_metrics
+    WHERE start_time >= (SELECT d FROM target_day)
+      AND start_time < (SELECT d FROM target_day) + INTERVAL '1 day'
+    GROUP BY 1
+),
+-- 2. Погодинні розширені метрики здоров'я
+health_advanced AS (
+    SELECT
+        date_trunc('hour', metric_time) AS h_time,
+        round(avg(walking_speed)::numeric, 2) AS walking_speed,
+        round(avg(walking_step_length)::numeric, 2) AS walking_step_length,
+        round(avg(walking_asymmetry_percentage)::numeric, 2) AS walking_asymmetry_percentage,
+        round(avg(walking_double_support_percentage)::numeric, 2) AS walking_double_support_percentage,
+        round(avg(stair_speed_up)::numeric, 2) AS stair_speed_up,
+        round(avg(stair_speed_down)::numeric, 2) AS stair_speed_down,
+        sum(flights_climbed) AS flights_climbed,
+        round(avg(heart_rate_variability)::numeric, 1) AS heart_rate_variability,
+        round(avg(respiratory_rate)::numeric, 1) AS respiratory_rate,
+        round(avg(resting_heart_rate)::numeric, 1) AS resting_heart_rate,
+        round(avg(walking_heart_rate_average)::numeric, 1) AS walking_heart_rate_average,
+        round(avg(headphone_audio_exposure)::numeric, 1) AS headphone_audio_exposure,
+        round(avg(environmental_audio_exposure)::numeric, 1) AS environmental_audio_exposure,
+        round(sum(time_in_daylight)::numeric, 1) AS time_in_daylight,
+        max(apple_stand_hour) AS apple_stand_hour,
+        round(sum(apple_stand_time)::numeric, 1) AS apple_stand_time
+    FROM health_advanced_metrics
+    WHERE metric_time >= (SELECT d FROM target_day)
+      AND metric_time < (SELECT d FROM target_day) + INTERVAL '1 day'
+    GROUP BY 1
+),
+-- 3. Музика: тепер просто агрегуємо треки, що мають валідну тривалість
+music_hourly AS (
+    SELECT
+        date_trunc('hour', played_at) AS h_time,
+        string_agg(track_name || ' — ' || artist_name || ' (' || round((duration_seconds / 60.0)::numeric, 1) || ' хв)', ' | ') AS played_tracks_list
+    FROM stg_music_tracks
+    WHERE played_at >= (SELECT d FROM target_day)
+      AND played_at < (SELECT d FROM target_day) + INTERVAL '1 day'
+      AND duration_seconds IS NOT NULL
+    GROUP BY 1
+),
+-- 4. Екранний час із захистом від паралельного трекінгу (максимум 60 хв на годину)
+screentime_normalized AS (
+    SELECT
+        date_trunc('hour', started_at) AS h_time,
+        duration_seconds,
+        CASE
+            WHEN app_name ILIKE '%supabase%' OR window_title ILIKE '%supabase%' THEN 'Supabase'
+            WHEN app_name ILIKE '%pycharm%' OR window_title ILIKE '%pycharm%' THEN 'PyCharm'
+            WHEN app_name ILIKE '%notion%' OR window_title ILIKE '%notion%' THEN 'Notion'
+            WHEN app_name ILIKE '%chrome%' OR window_title ILIKE '%chrome%' OR window_title ILIKE '%google chrome%' THEN 'Google Chrome'
+            WHEN app_name ILIKE '%gemini%' OR window_title ILIKE '%gemini%' THEN 'Google Gemini'
+            ELSE COALESCE(NULLIF(app_name, ''), 'Інше')
+        END AS clean_app_name
+    FROM stg_screentime_events
+    WHERE started_at >= (SELECT d FROM target_day)
+      AND started_at < (SELECT d FROM target_day) + INTERVAL '1 day'
+),
+screentime_hourly AS (
+    SELECT
+        h_time,
+        string_agg(clean_app_name || ': ' || round((LEAST(total_sec, 3600) / 60.0)::numeric, 1) || ' хв', ' | ') AS apps_usage_list,
+        count(*) AS screentime_events_count
+    FROM (
+        SELECT h_time, clean_app_name, sum(duration_seconds) AS total_sec
+        FROM screentime_normalized
+        GROUP BY h_time, clean_app_name
+    ) sub
+    GROUP BY h_time
+),
+-- 5. Денний макроконтекст
+daily_context AS (
+    SELECT
+        g.summary_date,
+        g.sleep_duration_min,
+        g.sleep_onset_time,
+        g.sleep_wake_time,
+        g.deep_sleep_min,
+        g.rem_sleep_min,
+        g.hrv_rmssd,
+        g.total_screentime_min,
+        g.productive_screentime_min,
+        g.total_tracks_played,
+        j.overall_score,
+        j.energy,
+        j.mood,
+        j.stress,
+        j.productivity,
+        j.tags AS journal_tags,
+        j.log_text AS journal_content
+    FROM gold_daily_summary g
+    LEFT JOIN silver_journal j ON g.summary_date = j.entry_date
+    WHERE g.summary_date = (SELECT d FROM target_day)
+)
+-- Фінальне зведення для AI-агента
+SELECT
+    to_char(h.hour_start, 'YYYY-MM-DD HH24:00') AS "Година",
+    h.hour_start::date AS "Дата",
+
+    -- Базові погодинні здоров'я
+    COALESCE(hh.step_count, 0) AS "Кроки за годину",
+    hh.heart_rate_avg AS "Сер. пульс",
+    hh.active_energy_kcal AS "Ккал",
+    COALESCE(hh.exercise_min, 0) AS "Хв тренувань",
+
+    -- Розширені здоров'я
+    ha.walking_speed AS "Швидкість ходьби",
+    ha.walking_step_length AS "Довжина кроку",
+    ha.walking_asymmetry_percentage AS "Асиметрія ходьби",
+    ha.walking_double_support_percentage AS "Подвійна підтримка ходьби",
+    ha.stair_speed_up AS "Швидкість вгору сходами",
+    ha.stair_speed_down AS "Швидкість вниз сходами",
+    COALESCE(ha.flights_climbed, 0) AS "Поверхів піднято",
+    ha.heart_rate_variability AS "HRV (год)",
+    ha.respiratory_rate AS "Частота дихання",
+    ha.resting_heart_rate AS "Пульс у спокої (год)",
+    ha.walking_heart_rate_average AS "Сер. пульс при ходьбі",
+    ha.headphone_audio_exposure AS "Шум навушників (dB)",
+    ha.environmental_audio_exposure AS "Шум довкілля (dB)",
+    COALESCE(ha.time_in_daylight, 0) AS "Хв на сонці",
+    ha.apple_stand_hour AS "Apple Stand Hour",
+    ha.apple_stand_time AS "Apple Stand Time",
+
+    -- Музика та Екранний час
+    COALESCE(mu.played_tracks_list, 'Тиша') AS "Прослухані треки",
+    COALESCE(st.apps_usage_list, 'Немає активності') AS "Використані додатки та хвилини",
+    COALESCE(st.screentime_events_count, 0) AS "Подій екрана",
+
+    -- Денний макроконтекст
+    dc.sleep_duration_min AS "Сон загалом (хв)",
+    dc.deep_sleep_min AS "Глибокий сон (хв)",
+    dc.rem_sleep_min AS "REM сон (хв)",
+    dc.sleep_onset_time AS "Час засинання",
+    dc.sleep_wake_time AS "Час прокидання",
+    dc.hrv_rmssd AS "HRV (день)",
+    dc.overall_score AS "Оцінка дня",
+    dc.energy AS "Енергія (щоденник)",
+    dc.mood AS "Настрій (щоденник)",
+    dc.stress AS "Стрес (щоденник)",
+    dc.productivity AS "Продуктивність (щоденник)",
+    dc.journal_tags AS "Теги щоденника",
+    dc.journal_content AS "Текст щоденника",
+    dc.total_screentime_min AS "Загальний екранний час (день)",
+    dc.productive_screentime_min AS "Продуктивний екранний час (день)",
+    dc.total_tracks_played AS "Прослухано треків (день)"
+
+FROM hours h
+LEFT JOIN health_hourly hh ON h.hour_start = hh.h_time
+LEFT JOIN health_advanced ha ON h.hour_start = ha.h_time
+LEFT JOIN music_hourly mu ON h.hour_start = mu.h_time
+LEFT JOIN screentime_hourly st ON h.hour_start = st.h_time
+CROSS JOIN daily_context dc
+ORDER BY h.hour_start ASC;
