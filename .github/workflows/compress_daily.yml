@@ -39,6 +39,14 @@ jobs:
               productivity, journal_tags, journal_content, total_screentime_min, 
               productive_screentime_min, total_tracks_played
           )
+          INSERT INTO gold_ai_daily_compressed (
+              summary_date, hours_list, steps_hourly, heart_rate_hourly, 
+              calories_hourly, exercise_hourly, screentime_hourly, music_hourly,
+              sleep_duration_min, deep_sleep_min, rem_sleep_min, sleep_onset_time, 
+              sleep_wake_time, hrv_rmssd, overall_score, energy, mood, stress, 
+              productivity, journal_tags, journal_content, total_screentime_min, 
+              total_tracks_played
+          )
           SELECT 
               \"Дата\" AS summary_date,
               string_agg(\"Година\", ' | ' ORDER BY \"Година\") AS hours_list,
@@ -62,7 +70,6 @@ jobs:
               MAX(\"Теги щоденника\"),
               MAX(\"Текст щоденника\"),
               MAX(\"Загальний екранний час (день)\"),
-              MAX(\"Продуктивний екранний час (день)\"),
               MAX(\"Прослуховано треків (день)\")
           FROM gold_ai_yesterday_hourly_summary
           GROUP BY \"Дата\"
