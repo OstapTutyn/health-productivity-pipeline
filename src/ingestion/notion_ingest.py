@@ -95,16 +95,33 @@ def fetch_notion_data(watermark_iso: str) -> list[dict]:
 
 
 def insert_notion_to_bronze(supabase: Client, pages: list[dict]) -> bool:
-    """Зберігає список сирих сторінок у bronze_journal."""
+    """Зберігає список сирих сторінок у bronze_journal, беручи дату з полів Notion."""
     if not pages:
         return False
 
-    # Кожну сторінку зберігаємо як окремий JSON-об'єкт в окремому рядку
-    payloads = [{"raw_payload": page} for page in pages]
+    payloads = []
+    for page in pages:
+        properties = page.get("properties", {})
+
+        date_prop = properties.get("Дата", {})
+
+        logical_date = None
+        if date_prop.get("type") == "date":
+            date_data = date_prop.get("date")
+            if date_data and date_data.get("start"):
+                logical_date = date_data.get("start")
+
+        if not logical_date:
+            logical_date = datetime.now().date().isoformat()
+
+
+        page["logical_entry_date"] = logical_date
+
+        payloads.append({"raw_payload": page})
 
     try:
         supabase.table("bronze_journal").insert(payloads).execute()
-        print(f"Успішно збережено {len(pages)} НОВИХ/ОНОВЛЕНИХ записів з Notion у bronze_journal!")
+        print(f"Успішно збережено {len(pages)} записів з Notion із їхніми реальними датами з полів!")
         return True
     except Exception as e:
         print(f"Помилка збереження в Supabase: {e}")
